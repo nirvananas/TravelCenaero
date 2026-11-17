@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frais de mission: smoke test</title>
+<!-- Drives the real app in an iframe. Run through tests/smoke_server.py, which serves
+     /__form (a Mission Request Form .odt) and receives the results on POST /__result. -->
+<pre id="result">running</pre>
+<iframe id="f" style="width:412px;height:900px"></iframe>
+<script type="module">
+const log = [];
+const check = (name, ok, extra = '') => log.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ` [${extra}]` : ''}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, what, ms = 15000) {
+  const t = Date.now();
+  while (Date.now() - t < ms) {
+    try { const v = fn(); if (v) return v; } catch { /* element not there yet */ }
+    await sleep(50);
+  }
+  throw new Error(`timeout waiting for ${what}`);
+}
+const b64 = async (blob) => {
+  const b = new Uint8Array(await blob.arrayBuffer());
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+const files = {};
+try {
+  await new Promise((r) => { const q = indexedDB.deleteDatabase('frais-mission'); q.onsuccess = q.onerror = q.onblocked = r; });
+  const f = document.getElementById('f');
+  f.src = '../index.html#/settings';
+  await new Promise((r) => { f.onload = r; });
+  const W = f.contentWindow;
+  const $ = (s) => W.document.querySelector(s);
+  const $$ = (s) => [...W.document.querySelectorAll(s)];
+  const setVal = (sel, v) => { const el = $(sel); el.value = v; el.dispatchEvent(new W.Event('change')); };
+  const setFile = async (sel, url, name, type) => {
+    const blob = await (await fetch(url)).blob();
+    const dt = new W.DataTransfer();
+    dt.items.add(new W.File([blob], name, { type }));
+    const el = $(sel);
+    el.files = dt.files;
+    el.dispatchEvent(new W.Event('change'));
+  };
+  const go = async (hash, sel) => { W.location.hash = hash; await until(() => $(sel), sel); };
+  const titles = () => $$('.list-item .title').map((e) => e.textContent);
+
+  // Settings: import the form template.
+  await until(() => $('#dLast'), 'settings view');
+  await setFile('#tpl', '/__form', 'form.odt', 'application/vnd.oasis.opendocument.text');
+  await until(() => /Importé/.test($('#view').textContent), 'template imported');
+  check('template import', true);
+  check('last name taken from template', $('#dLast').value === 'TAGUEMA', $('#dLast').value);
+  check('participant default taken from template', $('#f_participant').value === 'Ludovic TAGUEMA');
+
+  // New mission.
+  await go('#/', '#new');
+  $('#new').click();
+  await until(() => $('#city'), 'mission view');
+  setVal('#city', 'Delft');
+  setVal('#departDate', '2026-05-19');
+  await until(() => $('#base').textContent === 'TAGUEMA_DELFT_19_05_2026', 'file name');
+  check('file name', true);
+  check('form start date follows departure', $('#f_startDate').value === '2026-05-19');
+  check('trip-specific field not carried over', $('#f_purpose').value === '');
+  setVal('#f_purpose', 'Presenting at ERCOFTAC');
+  setVal('#f_missionType', 'Conference');
+
+  // Expense 1 with a photo, rotated.
+  $('#addExpense').click();
+  await until(() => $('#title'), 'expense view');
+  $('[data-chip="Repas midi"]').click();
+  await until(() => $('#title').value === 'Repas midi 1', 'chip numbering 1');
+  setVal('#amount', '28,45');
+  await setFile('#gal', 'fixtures/receipt.jpg', 'r.jpg', 'image/jpeg');
+  const img = await until(() => $('.photo img'), 'photo thumbnail');
+  await until(() => img.complete && img.naturalWidth === 30 && img.naturalHeight === 60, 'photo decoded 30x60');
+  $('[data-rot="0"]').click();
+  await until(() => { const i = $('.photo img'); return i && i.naturalWidth === 60 && i.naturalHeight === 30; }, 'rotated 60x30');
+  check('photo added and rotated', true);
+  $('#done').click();
+  await until(() => titles().length === 1, 'back on mission');
+
+  // Expense 2 without photo; invalid amount rejected.
+  $('#addExpense').click();
+  await until(() => $('#title'), 'expense view 2');
+  $('[data-chip="Repas midi"]').click();
+  await until(() => $('#title').value === 'Repas midi 2', 'chip numbering 2');
+  setVal('#amount', 'abc');
+  check('invalid amount flagged', $('#amount').classList.contains('warn'));
+  setVal('#amount', '4.4');
+  check('valid amount accepted', !$('#amount').classList.contains('warn'));
+  setVal('#note', 'pas de ticket papier');
+  $('#done').click();
+  await until(() => titles().length === 2, 'two expenses');
+
+  // Expense 3 abandoned empty -> pruned.
+  $('#addExpense').click();
+  await until(() => $('#title'), 'expense view 3');
+  $('#done').click();
+  await until(() => $('#addExpense') && $$('.list-item').length >= 2, 'mission view again');
+  await sleep(300);
+  check('empty expense pruned', titles().length === 2, titles().join('|'));
+
+  // Reorder.
+  $('[data-move="1"]').click();
+  await until(() => titles()[0] === 'Repas midi 2', 'moved down');
+  $$('[data-move="-1"]')[1].click(); // row 0's up button is disabled
+  await until(() => titles()[0] === 'Repas midi 1', 'moved back');
+  check('reorder', true);
+  check('total', /32,85/.test($('.total').textContent), $('.total').textContent);
+
+  // Generate.
+  $('#generate').click();
+  await until(() => $$('[data-dl]').length === 2, 'two download links', 30000);
+  for (const a of $$('[data-dl]')) files[a.getAttribute('download')] = await b64(await (await fetch(a.href)).blob());
+  check('generated', Object.keys(files).join(',') === 'TAGUEMA_DELFT_19_05_2026_justificatifs.pdf,TAGUEMA_DELFT_19_05_2026.odt', Object.keys(files).join(','));
+
+  // Data survives a reload.
+  W.location.reload();
+  await new Promise((r) => { f.onload = r; });
+  await sleep(100);
+  await go('#/', '#new'); // '#new' exists only on the home view
+  check('persisted after reload', /TAGUEMA_DELFT_19_05_2026/.test($('.list-item').textContent) && /2 dépense/.test($('.list-item').textContent));
+} catch (err) {
+  check('exception', false, err.stack || err.message);
+}
+document.getElementById('result').textContent = log.join('\n');
+await fetch('/__result', { method: 'POST', body: JSON.stringify({ log, files }) });
+</script>
