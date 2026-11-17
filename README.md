@@ -56,7 +56,7 @@ from the phone on the same Wi-Fi. Everything works except offline use and instal
 | `app.js` | screens, phone storage (IndexedDB), photo processing (downscale to 2000 px, JPEG) |
 | `pdf.js` | justificatifs PDF writer (A4, Helvetica, JPEG embedded as is) |
 | `odt.js` | ZIP read/write, file naming, filling the Mission Request Form's controls |
-| `sw.js` | offline cache (network first, so updates arrive by themselves) |
+| `sw.js` | offline first: opens from the copy stored on the phone; updates are fetched in the background and used from the next launch |
 
 ## Tests
 
