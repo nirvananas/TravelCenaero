@@ -3,7 +3,7 @@
 // used from the next launch on. Also receives receipts shared to the app (Share → Frais).
 const CACHE = 'frais-mission';
 const INBOX = 'frais-inbox';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'odt.js', 'pdf.js', 'xlsx.js', 'receipt.js',
+const FILES = ['./', 'index.html', 'style.css', 'app.js', 'odt.js', 'pdf.js', 'xlsx.js', 'receipt.js', 'summary.js', 'backup.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   // pdf.js (PDF receipts) and Tesseract (reading receipts), ~7 MB, so they work offline too
   'vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs',

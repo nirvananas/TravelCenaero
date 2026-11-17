@@ -14,13 +14,14 @@ For each mission it produces, automatically and kept up to date:
 File names follow `LASTNAME_CITY_DD_MM_YYYY`, where the date is the departure date. The numbers (1), (2)… are the same in the PDF and in the Excel.
 
 All data (missions, expenses, receipts) stays **on the phone**. Nothing is sent anywhere.
+One phone = one user: each colleague installs the app on their own phone, and their missions stay private there.
 
 ## Use
 
 1. **Installation (once, with internet).** Open https://nirvananas.github.io/TravelCenaero/ in Chrome, then ⋮ → *Install app*.
    Open it once while still online: it stores itself on the phone, including the receipt reader (about 7 MB).
-   ⚙ *Réglages* shows "✓ Prête" when it is done.
-2. **⚙ Réglages:** import an old filled-in Mission Request Form `.odt` once, for example `TAGUEMA_DELFT_19_05_2026.odt`.
+   👤 *Profil* shows "✓ Prête" when it is done.
+2. **👤 Profil:** import an old filled-in Mission Request Form `.odt` once, for example `TAGUEMA_DELFT_19_05_2026.odt`.
    Participant, project, mission type, position and general comments become the defaults for new missions.
 3. **＋ Nouvelle mission:** city and departure date. Under *Infos du voyage* go all the form fields
    (purpose, place, dates, trains, hotel, registration…). Under *Replicon* go the Type of mission and Bill Client.
@@ -32,8 +33,18 @@ All data (missions, expenses, receipts) stays **on the phone**. Nothing is sent 
      PDF receipts are read exactly from their text; photos are read by text recognition (OCR) on the phone.
      It fills only empty fields. **Check them**: the screen says "Lu automatiquement … à vérifier".
    - ⟳ rotates a photo; ↑ ↓ reorders expenses.
+   - **Dépensé jusqu'ici** (top of the mission): total, today's spending, expenses without a receipt,
+     a bar per category and, under *Par jour*, the spending of each day.
 5. **Documents:** in the mission, the *Documents* section is always up to date. ⬇ downloads a file; *Partager* sends the files
    (mail, Drive, KDE Connect…). Copy them to `~/Documents/Travels/` on the PC.
+
+6. **End of the trip: 🔒 Clôturer la mission.** The mission becomes read-only and moves to *Missions clôturées*;
+   its documents stay available. **🔓 Rouvrir** makes it editable again.
+   **⧉ Dupliquer** starts a new mission with the same travel details, without the expenses and with the dates cleared
+   (useful for recurring trips).
+7. **Backup (👤 Profil → 💾 Sauvegarder mes missions):** writes one `.zip` with all missions, receipts, profile
+   and form template. Keep it on the PC or on Drive. *Restaurer une sauvegarde* brings the missions back on a new phone
+   or after reinstalling. Missions with the same identity are replaced by the backup version; the others are kept.
 
 Expenses without a receipt are marked "pas de justificatif"; add a note to explain why.
 
@@ -53,6 +64,8 @@ and uses it from the next launch.
 | File | Role |
 |---|---|
 | `app.js` | screens, phone storage (IndexedDB), photo and PDF processing, inbox of shared receipts |
+| `summary.js` | spending so far: total, today, by category, by day |
+| `backup.js` | backup file format (ZIP: data.json + photos + form template) |
 | `receipt.js` | reading a receipt's text: amount, date, time, category; Replicon type |
 | `pdf.js` | justificatifs PDF writer (A4, summary table, receipts; no library) |
 | `xlsx.js` | Replicon Excel writer (no library) |

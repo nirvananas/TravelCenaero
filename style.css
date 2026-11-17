@@ -56,3 +56,11 @@ details > div { padding-bottom: 12px; }
   padding: 10px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; z-index: 4; }
 #toast.show { opacity: 1; }
 h2 { font-size: 16px; margin: 18px 0 8px; }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
+.big { font-size: 26px; font-weight: 700; }
+.bar { display: grid; grid-template-columns: 7.5em 1fr auto; gap: 8px; align-items: center; font-size: 14px; margin-top: 8px; }
+.track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.track span { display: block; height: 100%; background: var(--accent); }
+.card details.plain { border: 0; padding: 0; margin: 10px 0 0; background: none; }
+.card details.plain > summary { padding: 4px 0; font-weight: 400; }
+.card details.plain[open] > summary { border: 0; }

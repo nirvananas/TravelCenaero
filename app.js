@@ -2,6 +2,8 @@ import { fileBase, fillMissionForm, inspectTemplate, FORM_GROUPS, PERSISTENT_KEY
 import { buildJustificatifsPdf, formatAmount, formatDateFr } from './pdf.js';
 import { buildRepliconXlsx } from './xlsx.js';
 import { CATEGORIES, NUMBERED, REPLICON_TYPES, repliconType, categoryOfTitle, readReceipt } from './receipt.js';
+import { spendingSummary } from './summary.js';
+import { packBackup, unpackBackup } from './backup.js';
 
 const MAX_PX = 2000; // longest side of a stored photo
 const PDF_MAX_PX = 2400; // longest side of a rendered PDF page (small print on e-tickets)
@@ -365,7 +367,7 @@ function shiftDate(isoDate, days) {
 async function renderInbox() {
   setBar('Justificatifs reçus', true);
   const items = await inboxFiles();
-  const missions = await db.all('missions');
+  const missions = (await db.all('missions')).filter((m) => !m.closed);
   if (!items.length) { view.innerHTML = '<p class="muted">Aucun justificatif en attente.</p>'; return; }
   const cur = currentMission(missions);
   view.innerHTML = `
@@ -377,7 +379,7 @@ async function renderInbox() {
       <select id="target">${missions.map((m) => `<option value="${h(m.id)}" ${m === cur ? 'selected' : ''}>${h(missionBase(m))}</option>`).join('')}</select>
       <button class="btn primary block" id="each">Une dépense par justificatif</button>
       ${items.length > 1 ? '<button class="btn block" id="one">Une seule dépense pour tous</button>' : ''}`
-    : '<p class="card warn">Créez d’abord une mission, puis revenez ici (⚙ → Justificatifs reçus) ou partagez à nouveau.</p><a class="btn primary block" href="#/">Mes missions</a>'}
+    : '<p class="card warn">Aucune mission en cours : créez-en une (ou rouvrez-en une), puis revenez ici.</p><a class="btn primary block" href="#/">Mes missions</a>'}
     <button class="btn danger block" id="drop">Supprimer ces justificatifs</button>
     <p class="muted" id="status"></p>`;
   const status = (t) => { $('#status').textContent = t; };
@@ -418,17 +420,21 @@ async function renderHome() {
   setBar('Frais de mission', false);
   const missions = (await db.all('missions')).sort((a, b) => (b.departDate || '').localeCompare(a.departDate || ''));
   const template = await db.get('settings', 'template');
-  const rows = await Promise.all(missions.map(async (m) => {
+  const row = async (m) => {
     const exps = await db.expensesOf(m.id);
     return `<div class="card list-item row" data-id="${h(m.id)}"><div class="grow">
-      <div class="title">${h(missionBase(m))}</div>
+      <div class="title">${m.closed ? '🔒 ' : ''}${h(missionBase(m))}</div>
       <div class="muted">${exps.length} dépense(s) · ${formatAmount(missionTotal(exps))}</div></div><span>›</span></div>`;
-  }));
+  };
+  const open = await Promise.all(missions.filter((m) => !m.closed).map(row));
+  const closed = await Promise.all(missions.filter((m) => m.closed).map(row));
   view.innerHTML = `
     ${await inboxBanner()}
     ${template ? '' : `<div class="card warn">Pour générer aussi le <b>Mission Request Form</b> (.odt), importez une fois
-      un ancien formulaire dans <a href="#/settings">Réglages</a>. Sans lui, le PDF et l’Excel sont quand même produits.</div>`}
-    ${rows.join('') || '<p class="muted">Aucune mission. Créez-en une avec le bouton ci-dessous.</p>'}
+      un ancien formulaire dans <a href="#/settings">Profil</a>. Sans lui, le PDF et l’Excel sont quand même produits.</div>`}
+    <h2>En cours</h2>
+    ${open.join('') || '<p class="muted">Aucune mission en cours. Créez-en une avec le bouton ci-dessous.</p>'}
+    ${closed.length ? `<h2>Missions clôturées</h2>${closed.join('')}` : ''}
     <button class="btn primary fab" id="new">＋ Nouvelle mission</button>`;
   $$('.list-item').forEach((el) => { el.onclick = () => { location.hash = `#/m/${el.dataset.id}`; }; });
   $('#new').onclick = async () => {
@@ -439,6 +445,23 @@ async function renderHome() {
     navigator.storage?.persist?.();
     location.hash = `#/m/${m.id}?new`;
   };
+}
+
+/** "Spent so far" card: total, today, by category (bars), by day. */
+function summaryHtml(exps) {
+  const s = spendingSummary(exps, today());
+  const max = Math.max(...s.byGroup.map((g) => g[1]), 1);
+  const notes = [`Aujourd’hui : ${formatAmount(s.today)}`, `${s.count} dépense(s)`];
+  if (s.withoutProof) notes.push(`⚠ ${s.withoutProof} sans justificatif`);
+  if (s.withoutAmount) notes.push(`${s.withoutAmount} sans montant`);
+  return `<div class="card" id="summary">
+    <div class="row"><span class="grow muted">Dépensé jusqu’ici</span><span class="big">${formatAmount(s.total)}</span></div>
+    <div class="muted">${notes.join(' · ')}</div>
+    ${s.byGroup.map(([g, v]) => `<div class="bar"><span>${h(g)}</span>
+      <span class="track"><span style="width:${(100 * v / max).toFixed(1)}%"></span></span><span>${formatAmount(v)}</span></div>`).join('')}
+    ${s.byDay.length > 1 ? `<details class="plain"><summary class="muted">Par jour</summary>
+      ${s.byDay.map(([d, v]) => `<div class="row"><span class="grow">${formatDateFr(d)}</span><span>${formatAmount(v)}</span></div>`).join('')}</details>` : ''}
+  </div>`;
 }
 
 function formFieldHtml(f, v) {
@@ -460,17 +483,21 @@ async function renderMission(id, isNew) {
   const m = await db.get('missions', id);
   if (!m) { location.hash = '#/'; return; }
   const exps = await db.expensesOf(id);
+  const ro = Boolean(m.closed);
   setBar(missionBase(m), true);
   view.innerHTML = `
-    ${await inboxBanner()}
-    <div class="card">
+    ${ro ? '' : await inboxBanner()}
+    ${ro ? `<div class="card warn">🔒 Mission clôturée le ${new Date(m.closed).toLocaleDateString()} : lecture seule.
+      Les documents restent disponibles ci-dessous ; « Rouvrir » en bas de page pour la modifier.</div>` : ''}
+    ${summaryHtml(exps)}
+    <fieldset class="plain" ${ro ? 'disabled' : ''}><div class="card">
       <div class="pair">
         <div><label for="lastName">Nom</label><input id="lastName" value="${h(m.lastName)}" autocapitalize="characters"></div>
         <div><label for="city">Ville</label><input id="city" value="${h(m.city)}" placeholder="Delft"></div>
       </div>
       <label for="departDate">Date de départ</label><input id="departDate" type="date" value="${h(m.departDate)}">
       <div class="muted" style="margin-top:8px">Fichiers : <b id="base">${h(missionBase(m))}</b></div>
-    </div>
+    </div></fieldset>
 
     <h2>Dépenses</h2>
     ${exps.map((e, i) => `
@@ -481,8 +508,8 @@ async function renderMission(id, isNew) {
           <div class="muted">${[e.date && formatDateFr(e.date), e.amount && formatAmount(e.amount),
             e.photos.length ? `📷 ${e.photos.length}` : '⚠ pas de justificatif'].filter(Boolean).join(' · ')}</div>
         </div>
-        <button class="btn small" data-move="-1" data-id="${h(e.id)}" ${i === 0 ? 'disabled' : ''} aria-label="Monter">↑</button>
-        <button class="btn small" data-move="1" data-id="${h(e.id)}" ${i === exps.length - 1 ? 'disabled' : ''} aria-label="Descendre">↓</button>
+        ${ro ? '' : `<button class="btn small" data-move="-1" data-id="${h(e.id)}" ${i === 0 ? 'disabled' : ''} aria-label="Monter">↑</button>
+        <button class="btn small" data-move="1" data-id="${h(e.id)}" ${i === exps.length - 1 ? 'disabled' : ''} aria-label="Descendre">↓</button>`}
       </div>`).join('') || '<p class="muted">Aucune dépense pour l’instant.</p>'}
     <div class="row"><span class="grow muted">Total</span><span class="total">${formatAmount(missionTotal(exps))}</span></div>
 
@@ -490,6 +517,7 @@ async function renderMission(id, isNew) {
     <div class="card" id="out"></div>
 
     <h2>Infos du voyage (Mission Request Form)</h2>
+    <fieldset class="plain" ${ro ? 'disabled' : ''}>
     ${FORM_GROUPS.map((g, gi) => `<details ${isNew && gi < 2 ? 'open' : ''}><summary>${h(g.title)}</summary><div>
       ${g.fields.map((f) => formFieldHtml(f, m.form[f.key] ?? '')).join('')}</div></details>`).join('')}
     <details><summary>Replicon</summary><div>
@@ -499,9 +527,14 @@ async function renderMission(id, isNew) {
       <label for="billClient">Bill Client</label>
       <select id="billClient">${['Yes', 'No'].map((v) => `<option ${v === (m.billClient ?? 'Yes') ? 'selected' : ''}>${v}</option>`).join('')}</select>
     </div></details>
+    </fieldset>
 
+    <h2>Mission</h2>
+    ${ro ? '<button class="btn primary block" id="reopen">🔓 Rouvrir la mission</button>'
+    : '<button class="btn primary block" id="close">🔒 Clôturer la mission</button>'}
+    <button class="btn block" id="duplicate">⧉ Dupliquer (nouvelle mission avec les mêmes infos)</button>
     <button class="btn danger block" id="delMission">Supprimer la mission</button>
-    <button class="btn primary fab" id="addExpense">＋ Dépense</button>`;
+    ${ro ? '' : '<button class="btn primary fab" id="addExpense">＋ Dépense</button>'}`;
 
   const out = $('#out');
   const save = async () => {
@@ -537,9 +570,36 @@ async function renderMission(id, isNew) {
       render();
     };
   });
-  $('#addExpense').onclick = async () => {
-    const e = await newExpense(id);
-    location.hash = `#/m/${id}/e/${e.id}`;
+  if ($('#addExpense')) {
+    $('#addExpense').onclick = async () => {
+      const e = await newExpense(id);
+      location.hash = `#/m/${id}/e/${e.id}`;
+    };
+  }
+  if ($('#close')) {
+    $('#close').onclick = async () => {
+      if (!confirm(`Clôturer ${missionBase(m)} ? Elle passera en lecture seule ; vous pourrez la rouvrir.`)) return;
+      m.closed = Date.now();
+      await db.put('missions', m);
+      toast('Mission clôturée. Pensez à faire une sauvegarde (Profil).', 5000);
+      render(true);
+    };
+  }
+  if ($('#reopen')) {
+    $('#reopen').onclick = async () => {
+      delete m.closed;
+      await db.put('missions', m);
+      render();
+    };
+  }
+  $('#duplicate').onclick = async () => {
+    const copy = { ...m, id: uid(), created: Date.now(), departDate: today(), form: { ...m.form } };
+    delete copy.closed;
+    for (const f of FORM_GROUPS.flatMap((g) => g.fields)) if (f.type === 'date') copy.form[f.key] = '';
+    copy.form.startDate = copy.departDate;
+    await db.put('missions', copy);
+    toast('Copie créée sans dépenses : vérifiez les dates', 5000);
+    location.hash = `#/m/${copy.id}?new`;
   };
   $('#delMission').onclick = async () => {
     if (!confirm(`Supprimer ${missionBase(m)} et ses ${exps.length} dépense(s) ? Irréversible.`)) return;
@@ -554,19 +614,21 @@ async function renderExpense(missionId, expenseId) {
   const e = await db.get('expenses', expenseId);
   if (!e) { location.hash = `#/m/${missionId}`; return; }
   const exps = await db.expensesOf(missionId);
+  const ro = Boolean((await db.get('missions', missionId))?.closed);
   const n = exps.findIndex((x) => x.id === expenseId) + 1;
   setBar(`Dépense (${n})`, true);
   view.innerHTML = `
+    ${ro ? '<div class="card warn">🔒 Mission clôturée : lecture seule.</div>' : `
     <h2 style="margin-top:4px">Justificatif</h2>
     <div class="row">
       <label class="btn primary grow" style="margin:0">📷 Photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
       <label class="btn grow" style="margin:0">📄 Fichier / PDF<input id="gal" type="file" accept="image/*,application/pdf,.pdf" multiple hidden></label>
-    </div>
+    </div>`}
     <p class="muted" id="status"></p>
     <div class="photos">${e.photos.map((p, i) => `<div class="photo"><img src="${blobUrl(p.blob)}" alt="justificatif ${i + 1}">
-      <button data-del="${i}" aria-label="Supprimer">×</button>
-      <button data-rot="${i}" style="top:auto;bottom:4px" aria-label="Pivoter">⟳</button></div>`).join('')}</div>
-    <div class="card" style="margin-top:12px">
+      ${ro ? '' : `<button data-del="${i}" aria-label="Supprimer">×</button>
+      <button data-rot="${i}" style="top:auto;bottom:4px" aria-label="Pivoter">⟳</button>`}</div>`).join('')}</div>
+    <fieldset class="plain" ${ro ? 'disabled' : ''}><div class="card" style="margin-top:12px">
       <label for="title">Intitulé</label><input id="title" value="${h(e.title)}" placeholder="Repas midi 1">
       <div class="chips">${CATEGORIES.map((c) => `<button class="chip" data-chip="${h(c)}">${h(c)}</button>`).join('')}</div>
       <div class="pair">
@@ -577,9 +639,9 @@ async function renderExpense(missionId, expenseId) {
       <input id="type" list="typeList" value="${h(e.type)}" placeholder="${h(expenseType(e))}">
       <datalist id="typeList">${REPLICON_TYPES.map((t) => `<option value="${h(t)}">`).join('')}</datalist>
       <label for="note">Remarque (optionnel)</label><input id="note" value="${h(e.note)}" placeholder="pas de ticket papier…">
-    </div>
+    </div></fieldset>
     <button class="btn primary block" id="done">OK</button>
-    <button class="btn danger block" id="delExpense">Supprimer la dépense</button>`;
+    ${ro ? '' : '<button class="btn danger block" id="delExpense">Supprimer la dépense</button>'}`;
 
   const patch = (fn) => db.patch('expenses', expenseId, fn);
   $('#title').onchange = (ev) => {
@@ -620,6 +682,8 @@ async function renderExpense(missionId, expenseId) {
       $$('#cam, #gal').forEach((i) => { i.disabled = false; });
     }
   };
+  $('#done').onclick = () => history.back();
+  if (ro) return;
   $('#cam').onchange = (ev) => addFiles([...ev.target.files]);
   $('#gal').onchange = (ev) => addFiles([...ev.target.files]);
   $$('[data-del]').forEach((el) => {
@@ -637,7 +701,6 @@ async function renderExpense(missionId, expenseId) {
       render();
     };
   });
-  $('#done').onclick = () => history.back();
   $('#delExpense').onclick = async () => {
     if (!confirm(`Supprimer la dépense (${n}) ?`)) return;
     await db.del('expenses', expenseId);
@@ -651,10 +714,46 @@ async function pruneEmpty(expenseId) {
   if (e && !e.title && !e.amount && !e.note && !e.photos.length) await db.del('expenses', expenseId);
 }
 
+/** Everything on the phone, as a backup file (see backup.js). */
+async function makeBackup() {
+  const missions = await db.all('missions');
+  const expenses = await Promise.all((await db.all('expenses')).map(async (e) => ({
+    ...e, photos: await Promise.all(e.photos.map(async (p) => ({ data: new Uint8Array(await p.blob.arrayBuffer()), w: p.w, h: p.h }))),
+  })));
+  const t = await db.get('settings', 'template');
+  const template = t ? { name: t.name, importedAt: t.importedAt, data: new Uint8Array(await t.blob.arrayBuffer()) } : null;
+  const zip = packBackup({ missions, expenses, defaults: await db.get('settings', 'defaults'), template });
+  return { file: new File([zip], `frais-sauvegarde-${today()}.zip`, { type: 'application/zip' }), missions: missions.length, expenses: expenses.length };
+}
+
+/** Restore a backup file: its missions replace those with the same id, others are kept. */
+async function restoreBackup(file) {
+  const b = await unpackBackup(new Uint8Array(await file.arrayBuffer()), inflateRaw);
+  const existing = new Set((await db.all('missions')).map((m) => m.id));
+  const replaced = b.missions.filter((m) => existing.has(m.id)).length;
+  if (!confirm(`Sauvegarde du ${new Date(b.exported).toLocaleString()} : ${b.missions.length} mission(s), ${b.expenses.length} dépense(s).`
+    + (replaced ? `\n${replaced} mission(s) déjà présente(s) seront remplacées par la version sauvegardée.` : '')
+    + '\nLes autres missions du téléphone sont conservées. Restaurer ?')) return false;
+  for (const m of b.missions) {
+    if (existing.has(m.id)) for (const e of await db.expensesOf(m.id)) await db.del('expenses', e.id);
+    await db.put('missions', m);
+  }
+  for (const e of b.expenses) {
+    await db.put('expenses', { ...e, photos: e.photos.map((p) => ({ blob: new Blob([p.data], { type: 'image/jpeg' }), w: p.w, h: p.h })) });
+  }
+  if (b.defaults && !(await db.get('settings', 'defaults'))) await db.put('settings', b.defaults, 'defaults');
+  if (b.template && !(await db.get('settings', 'template'))) {
+    await db.put('settings', { blob: new Blob([b.template.data], { type: 'application/vnd.oasis.opendocument.text' }),
+      name: b.template.name, importedAt: b.template.importedAt }, 'template');
+  }
+  return true;
+}
+
 async function renderSettings() {
-  setBar('Réglages', true);
+  setBar('Profil', true);
   const d = await getDefaults();
   const template = await db.get('settings', 'template');
+  const lastBackup = await db.get('settings', 'lastBackup');
   const defFields = FORM_GROUPS.flatMap((g) => g.fields).filter((f) => PERSISTENT_KEYS.includes(f.key));
   view.innerHTML = `
     ${await inboxBanner()}
@@ -670,9 +769,38 @@ async function renderSettings() {
     </div>
     <h2>Valeurs par défaut des nouvelles missions</h2>
     <div class="card">${defFields.map((f) => formFieldHtml(f, d.form[f.key] ?? '')).join('')}</div>
+    <h2>Sauvegarde</h2>
+    <div class="card">
+      <div class="muted">Vos missions ne sont que sur ce téléphone. Une sauvegarde (fichier .zip, à garder sur le PC ou Drive)
+        permet de les retrouver sur un nouveau téléphone ou après une réinstallation.<br>
+        Dernière sauvegarde : <b>${lastBackup ? new Date(lastBackup).toLocaleDateString() : 'jamais'}</b></div>
+      <button class="btn primary block" id="backup">💾 Sauvegarder mes missions</button>
+      <div id="backupOut"></div>
+      <label class="btn block">Restaurer une sauvegarde<input id="restore" type="file" accept=".zip,application/zip" hidden></label>
+    </div>
     <h2>Lecture automatique hors ligne</h2>
     <div class="card"><div class="muted" id="offline">Vérification…</div></div>
     <p class="muted" id="storage">Données stockées uniquement sur ce téléphone.</p>`;
+
+  $('#backup').onclick = async () => {
+    $('#backup').disabled = true;
+    try {
+      const { file, missions, expenses } = await makeBackup();
+      await db.put('settings', Date.now(), 'lastBackup');
+      const url = blobUrl(file);
+      $('#backupOut').innerHTML = `<p class="muted">${missions} mission(s), ${expenses} dépense(s), ${(file.size / 1e6).toFixed(1)} Mo :</p>
+        <a class="btn block" id="backupLink" href="${url}" download="${h(file.name)}">⬇ ${h(file.name)}</a>`
+        + (navigator.canShare?.({ files: [file] }) ? '<button class="btn block" id="backupShare">Partager (Drive, mail…)</button>' : '');
+      if ($('#backupShare')) $('#backupShare').onclick = () => navigator.share({ files: [file] }).catch((e) => { if (e.name !== 'AbortError') toast(e.message); });
+    } finally {
+      $('#backup').disabled = false;
+    }
+  };
+  $('#restore').onchange = async (ev) => {
+    const f = ev.target.files[0];
+    if (!f) return;
+    if (await restoreBackup(f)) { toast('Sauvegarde restaurée'); location.hash = '#/'; }
+  };
 
   navigator.storage?.persisted?.().then((ok) => { if (ok) $('#storage').textContent += ' Stockage persistant accordé.'; });
   caches.open('frais-mission').then((c) => c.match('vendor/tesseract/lang/fra.traineddata.gz', { ignoreSearch: true }))

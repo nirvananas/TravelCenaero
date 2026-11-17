@@ -169,6 +169,60 @@ try {
   await sleep(100);
   await go('#/', '#new'); // '#new' exists only on the home view
   check('persisted after reload', /TAGUEMA_DELFT_19_05_2026/.test($('.list-item').textContent) && /6 dépense/.test($('.list-item').textContent));
+
+  // Spending summary.
+  W.confirm = () => true; // headless Chrome would dismiss confirmation dialogs
+  $('.list-item').click();
+  await until(() => $('#summary'), 'mission with summary');
+  check('summary total', /86,65/.test($('#summary .big').textContent), $('#summary .big').textContent);
+  check('summary by category', $$('#summary .bar').map((b) => b.firstElementChild.textContent).join('|') === 'Repas|Train',
+    $$('#summary .bar').map((b) => b.textContent.replace(/\s+/g, ' ')).join('|'));
+  const missionHash = W.location.hash;
+  log.push(`INFO mission ${missionHash}`);
+
+  // Close: read-only, listed apart, not offered for shared receipts; then reopen.
+  $('#close').click();
+  await until(() => $('#reopen'), 'closed mission');
+  check('closed: no add button', !$('#addExpense'));
+  check('closed: fields locked', $('#city').matches(':disabled') && $('#f_purpose').matches(':disabled')); // via <fieldset disabled>
+  check('closed: documents still built', await until(() => $$('[data-dl]').length === 3, 'docs of closed mission', 60000));
+  $('.list-item').click();
+  await until(() => $('#done'), 'closed expense view');
+  check('closed: expense read-only', $('#amount').matches(':disabled') && !$('#cam') && !$('#delExpense'));
+  await go('#/', '#new');
+  check('closed: listed apart', /Missions clôturées/.test($('#view').textContent) && /🔒/.test($('#view').textContent));
+  await go(missionHash, '#reopen');
+  $('#reopen').click();
+  await until(() => $('#addExpense'), 'reopened');
+  check('reopened: editable again', !$('#city').matches(':disabled'));
+
+  // Duplicate: same travel details, no expenses, dates cleared.
+  $('#duplicate').click();
+  await until(() => W.location.hash !== missionHash && $('#city'), 'duplicate view');
+  await until(() => $('#city').value === 'Delft', 'duplicate loaded');
+  check('duplicate', $('#f_purpose').value === 'Presenting at ERCOFTAC' && titles().length === 0
+    && $('#f_endDate').value === '' && $('#departDate').value === new Date().toLocaleDateString('sv'));
+
+  // Backup, delete the mission, restore it.
+  await go('#/settings', '#backup');
+  $('#backup').click();
+  const link = await until(() => $('#backupLink'), 'backup file', 60000);
+  const zip = await (await fetch(link.href)).blob();
+  check('backup made', zip.size > 1000 && /jamais/.test($('#view').textContent), `${zip.size} bytes`);
+  await go(missionHash, '#delMission');
+  $('#delMission').click();
+  await until(() => $('#new') && !/TAGUEMA_DELFT_19_05_2026/.test($('#view').textContent), 'mission deleted');
+  await go('#/settings', '#restore');
+  const dt = new W.DataTransfer();
+  dt.items.add(new W.File([zip], 'frais-sauvegarde.zip', { type: 'application/zip' }));
+  $('#restore').files = dt.files;
+  $('#restore').dispatchEvent(new W.Event('change'));
+  await until(() => $('#new') && /TAGUEMA_DELFT_19_05_2026/.test($('#view').textContent), 'restored', 60000);
+  await go(missionHash, '#summary');
+  check('restored with expenses and photos', titles().length === 6 && /86,65/.test($('#summary .big').textContent));
+  $('.list-item').click();
+  await until(() => $('.photo img'), 'restored photo');
+  check('restored photo decodes', await until(() => $('.photo img').naturalWidth > 0, 'photo decoded'));
 } catch (err) {
   const W = document.getElementById('f').contentWindow;
   check('exception', false, `${err.stack || err.message} | status: ${W.document.querySelector('#status')?.textContent} | toast: ${W.document.querySelector('#toast')?.textContent}`);
