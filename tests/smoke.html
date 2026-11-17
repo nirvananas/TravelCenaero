@@ -110,20 +110,68 @@ try {
   check('reorder', true);
   check('total', /32,85/.test($('.total').textContent), $('.total').textContent);
 
-  // Generate.
-  $('#generate').click();
-  await until(() => $$('[data-dl]').length === 2, 'two download links', 30000);
+  // Expense read automatically from a photo (OCR, offline Tesseract).
+  $('#addExpense').click();
+  await until(() => $('#title'), 'expense view (OCR)');
+  await setFile('#gal', 'fixtures/receipt_ocr.jpg', 'ticket.jpg', 'image/jpeg');
+  // The fields are shown once the view re-renders, which also shows the photo.
+  await until(() => /Lu automatiquement|Rien de lisible/.test($('#status')?.textContent || '') && $('.photo img'), 'OCR done', 180000);
+  log.push(`INFO OCR status: ${$('#status').textContent} | toast: ${$('#toast').textContent}`);
+  check('OCR title', $('#title').value === 'Repas soir 1', $('#title').value);
+  check('OCR amount', $('#amount').value === '22,50', $('#amount').value);
+  check('OCR date', $('#date').value === '2026-05-19', $('#date').value);
+  check('OCR type default', $('#type').placeholder === 'Avance', $('#type').placeholder);
+  $('#done').click();
+  await until(() => titles().length === 3, 'three expenses');
+
+  // Expense from a PDF e-ticket: page rendered as an image, text read from the PDF.
+  $('#addExpense').click();
+  await until(() => $('#title'), 'expense view (PDF)');
+  await setFile('#gal', 'fixtures/ticket.pdf', 'ticket.pdf', 'application/pdf');
+  await until(() => /Lu automatiquement|Rien de lisible/.test($('#status')?.textContent || '') && $('.photo img'), 'PDF read', 60000);
+  check('PDF page added as image', $$('.photo img').length === 1);
+  check('PDF title', $('#title').value === 'Train', $('#title').value);
+  check('PDF amount', $('#amount').value === '4,40', $('#amount').value);
+  check('PDF type default', $('#type').placeholder === 'Avions, trains, métros', $('#type').placeholder);
+  $('#done').click();
+  await until(() => titles().length === 4, 'four expenses');
+
+  // Share → Frais (share target): the service worker keeps the files, the inbox files them.
+  await until(() => W.navigator.serviceWorker.controller, 'service worker controls the app', 60000);
+  const fd = new W.FormData();
+  for (const [u, n, t] of [['fixtures/receipt_ocr.jpg', 'resto.jpg', 'image/jpeg'], ['fixtures/ticket.pdf', 'billet.pdf', 'application/pdf']]) {
+    fd.append('files', new W.File([await (await fetch(u)).blob()], n, { type: t }));
+  }
+  const shared = await W.fetch('share', { method: 'POST', body: fd });
+  check('share target answered', shared.ok, `${shared.status} ${shared.url}`); // the files' arrival is checked below
+  await go('#/inbox', '#each');
+  check('inbox lists both files', /resto\.jpg/.test($('#view').textContent) && /billet\.pdf/.test($('#view').textContent));
+  $('#each').click();
+  await until(() => titles().length === 6, 'inbox filed into the mission', 240000);
+  check('inbox filed', titles().slice(4).join('|') === 'Repas soir 2|Train', titles().join('|'));
+  check('inbox emptied', (await (await W.caches.open('frais-inbox')).keys()).length === 0);
+  check('total with read receipts', /86,65/.test($('.total').textContent), $('.total').textContent);
+
+  // Documents are built automatically.
+  await until(() => $$('[data-dl]').length === 3, 'three documents', 60000);
   for (const a of $$('[data-dl]')) files[a.getAttribute('download')] = await b64(await (await fetch(a.href)).blob());
-  check('generated', Object.keys(files).join(',') === 'TAGUEMA_DELFT_19_05_2026_justificatifs.pdf,TAGUEMA_DELFT_19_05_2026.odt', Object.keys(files).join(','));
+  check('documents', Object.keys(files).sort().join(',') ===
+    'TAGUEMA_DELFT_19_05_2026.odt,TAGUEMA_DELFT_19_05_2026_depenses.xlsx,TAGUEMA_DELFT_19_05_2026_justificatifs.pdf', Object.keys(files).join(','));
+
+  // Everything needed offline (including the OCR engine and model) is in the app cache.
+  const cached = (await (await W.caches.open('frais-mission')).keys()).map((r) => new URL(r.url).pathname);
+  check('offline cache complete', ['/vendor/tesseract/lang/fra.traineddata.gz', '/vendor/tesseract/tesseract-core-simd-lstm.wasm.js',
+    '/vendor/pdfjs/pdf.worker.min.mjs', '/receipt.js', '/xlsx.js'].every((f) => cached.includes(f)), `${cached.length} files`);
 
   // Data survives a reload.
   W.location.reload();
   await new Promise((r) => { f.onload = r; });
   await sleep(100);
   await go('#/', '#new'); // '#new' exists only on the home view
-  check('persisted after reload', /TAGUEMA_DELFT_19_05_2026/.test($('.list-item').textContent) && /2 dépense/.test($('.list-item').textContent));
+  check('persisted after reload', /TAGUEMA_DELFT_19_05_2026/.test($('.list-item').textContent) && /6 dépense/.test($('.list-item').textContent));
 } catch (err) {
-  check('exception', false, err.stack || err.message);
+  const W = document.getElementById('f').contentWindow;
+  check('exception', false, `${err.stack || err.message} | status: ${W.document.querySelector('#status')?.textContent} | toast: ${W.document.querySelector('#toast')?.textContent}`);
 }
 document.getElementById('result').textContent = log.join('\n');
 await fetch('/__result', { method: 'POST', body: JSON.stringify({ log, files }) });

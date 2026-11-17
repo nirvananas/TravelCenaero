@@ -1,62 +1,64 @@
 # Frais de mission
 
-A phone web app (PWA) for recording expenses during a work mission, as they happen.
-It works offline, and Android can install it like a normal app.
-When the mission is over, it generates:
+A phone app (PWA) for recording expenses during a work mission, as they happen.
+After a single first launch with internet, it works **without internet**.
+
+For each mission it produces, automatically and kept up to date:
 
 | File | Content |
 |---|---|
-| `TAGUEMA_DELFT_19_05_2026_justificatifs.pdf` | one entry per expense: `(n) title`, date · amount · note, then the receipt photos; total at the end |
-| `TAGUEMA_DELFT_19_05_2026.odt` | the Cenaero **Mission Request Form** (SUPBPM-F-003-06), filled in |
+| `TAGUEMA_DELFT_19_05_2026_justificatifs.pdf` | page 1: mission details and a summary table (n°, date, description, type, amount, total); then each expense `(n) title` with its receipts (photos or PDF pages) |
+| `TAGUEMA_DELFT_19_05_2026_depenses.xlsx` | Replicon table: n°, Date Incurred, Description, Type, Bill Client, Type of mission, Amount, plus the total (formula) |
+| `TAGUEMA_DELFT_19_05_2026.odt` | the Cenaero **Mission Request Form** (SUPBPM-F-003-06), filled in from the travel details |
 
-File names follow `LASTNAME_CITY_DD_MM_YYYY`, where the date is the departure date.
+File names follow `LASTNAME_CITY_DD_MM_YYYY`, where the date is the departure date. The numbers (1), (2)… are the same in the PDF and in the Excel.
 
-All data (missions, expenses, photos) stays **on the phone**, in the browser's IndexedDB.
-Nothing is sent anywhere. No server, account or library is needed.
+All data (missions, expenses, receipts) stays **on the phone**. Nothing is sent anywhere.
 
 ## Use
 
-1. **Réglages (⚙)**: import an old filled-in Mission Request Form `.odt` once, for example
-   `TAGUEMA_DELFT_19_05_2026.odt`. The app checks that it is the expected form version.
-   It then fills the same form for every mission.
-   Participant, project, mission type, position and general comments are kept as defaults for new missions.
-   Without a form, only the PDF is generated.
-2. **＋ Nouvelle mission**: enter the city and the departure date. The *Mission Request Form* section has every field of the form.
-3. **＋ Dépense**: pick a title (quick buttons; *Repas midi/soir* are numbered automatically) and enter the amount.
-   Use **📷 Photo** for the receipt, or **🖼 Galerie** for a screenshot of an e-ticket. Use ⟳ to rotate a photo.
-   Use ↑ ↓ to reorder; the numbers (1), (2)… follow the list order.
-4. **Générer les documents**: download both files, or share them (mail, Drive, KDE Connect…),
-   then copy them to `~/Documents/Travels/`.
+1. **Installation (once, with internet).** Open https://nirvananas.github.io/TravelCenaero/ in Chrome, then ⋮ → *Install app*.
+   Open it once while still online: it stores itself on the phone, including the receipt reader (about 7 MB).
+   ⚙ *Réglages* shows "✓ Prête" when it is done.
+2. **⚙ Réglages:** import an old filled-in Mission Request Form `.odt` once, for example `TAGUEMA_DELFT_19_05_2026.odt`.
+   Participant, project, mission type, position and general comments become the defaults for new missions.
+3. **＋ Nouvelle mission:** city and departure date. Under *Infos du voyage* go all the form fields
+   (purpose, place, dates, trains, hotel, registration…). Under *Replicon* go the Type of mission and Bill Client.
+4. **During the trip:**
+   - **＋ Dépense → 📷 Photo** of the receipt, or **📄 Fichier / PDF** for a receipt saved on the phone.
+   - **From Gmail or another app:** open the receipt (PDF or image) → *Partager* → **Frais**.
+     The receipts land in *Justificatifs reçus*; choose the mission and tap *Une dépense par justificatif*.
+   - The app **reads the receipt by itself**: amount, date and category (Train, Repas midi/soir, Hôtel, Taxi…).
+     PDF receipts are read exactly from their text; photos are read by text recognition (OCR) on the phone.
+     It fills only empty fields. **Check them**: the screen says "Lu automatiquement … à vérifier".
+   - ⟳ rotates a photo; ↑ ↓ reorders expenses.
+5. **Documents:** in the mission, the *Documents* section is always up to date. ⬇ downloads a file; *Partager* sends the files
+   (mail, Drive, KDE Connect…). Copy them to `~/Documents/Travels/` on the PC.
 
-Expenses with no photo are marked "pas de justificatif" in the PDF; add a note to explain them.
-PDF e-tickets: take a screenshot and add it from the gallery.
+Expenses without a receipt are marked "pas de justificatif"; add a note to explain why.
 
-## Install on the phone
+### Replicon types
+Each expense gets a Replicon *Type* from its category: Train, Avion, Métro, Bus → "Avions, trains, métros";
+everything else → "Avance". These are the two types seen on a real Replicon sheet. You can change the type per expense.
+The mission's *Type of mission* is derived from the form: Training → "Formation", Conference → "Conférence",
+Meeting → "Réunion". Only "Formation" has been seen in Replicon; check the other two and change them if needed.
 
-The app must be served over **HTTPS** so it can work offline and be installed. Any static host works.
-Example with GitHub Pages:
+## Updating the app on the phone
 
-```bash
-git remote add origin git@github.com:<you>/frais-mission.git
-git push -u origin main
-# GitHub → Settings → Pages → Branch: main / root
-```
-
-Then open `https://<you>.github.io/frais-mission/` in Chrome on Android and choose ⋮ → *Install app*.
-
-The repository holds no personal data and no copy of the Cenaero form; the form is imported on the phone.
-
-For a quick try without hosting, run `python3 -m http.server 8000` and open `http://<pc-ip>:8000`
-from the phone on the same Wi-Fi. Everything works except offline use and installation.
+Push to `main`. GitHub Pages republishes within a minute. The phone picks up the new version in the background
+and uses it from the next launch.
 
 ## Code
 
 | File | Role |
 |---|---|
-| `app.js` | screens, phone storage (IndexedDB), photo processing (downscale to 2000 px, JPEG) |
-| `pdf.js` | justificatifs PDF writer (A4, Helvetica, JPEG embedded as is) |
+| `app.js` | screens, phone storage (IndexedDB), photo and PDF processing, inbox of shared receipts |
+| `receipt.js` | reading a receipt's text: amount, date, time, category; Replicon type |
+| `pdf.js` | justificatifs PDF writer (A4, summary table, receipts; no library) |
+| `xlsx.js` | Replicon Excel writer (no library) |
 | `odt.js` | ZIP read/write, file naming, filling the Mission Request Form's controls |
-| `sw.js` | offline first: opens from the copy stored on the phone; updates are fetched in the background and used from the next launch |
+| `sw.js` | offline first (opens from the phone's copy, updates in the background); receives shared receipts |
+| `vendor/` | pdf.js and Tesseract (OCR), see [vendor/VERSIONS.md](vendor/VERSIONS.md) |
 
 ## Tests
 
@@ -65,6 +67,7 @@ node --test tests/                       # unit tests (form tests use ~/Document
                                          #  or MISSION_FORM=<path>; skipped if absent)
 python3 tests/smoke_server.py <form.odt> <out-dir> 8765 &
 google-chrome --headless=new --user-data-dir=$(mktemp -d) http://localhost:8765/tests/smoke.html
-                                         # drives the real app end to end; prints PASS/FAIL, saves the generated files
-node tests/demo.mjs <form.odt> <out-dir> <photo.jpg>...   # builds both documents for a visual check
+                                         # drives the real app end to end, including OCR, PDF receipts and
+                                         #  Share → Frais; prints PASS/FAIL and saves the generated files
+node tests/demo.mjs <form.odt> <out-dir> <photo.jpg>...   # builds the three documents for a visual check
 ```

@@ -36,7 +36,7 @@ test('fit keeps aspect ratio', () => {
 test('PDF structure: header, xref offsets, pages, images, captions', () => {
   const jpg = fixture('receipt.jpg');
   const pdf = buildJustificatifsPdf({ title: 'TAGUEMA_DELFT_19_05_2026' }, [
-    { title: 'Train Annecy → Delft', date: '2026-05-19', amount: '157', photos: [{ data: jpg }, { data: fixture('gray.jpg') }] },
+    { title: 'Train Annecy → Delft', date: '2026-05-19', amount: '157', type: 'Avions, trains, métros', photos: [{ data: jpg }, { data: fixture('gray.jpg') }] },
     { title: 'Repas (midi) 1', amount: '28.45', photos: [] },
     { title: 'Hôtel', amount: '420', photos: [{ data: jpg }] },
   ]);
@@ -55,7 +55,9 @@ test('PDF structure: header, xref offsets, pages, images, captions', () => {
   assert.ok(s.includes(hx('(1) Train Annecy -> Delft')));
   assert.ok(s.includes(hx('(2) Repas (midi) 1')));
   assert.ok(s.includes(hx('28,45 € · pas de justificatif')));
-  assert.ok(s.includes(hx('Total : 605,45 €')));
+  assert.ok(s.includes(hx('Avions, trains, métros')));
+  assert.ok(s.includes(hx('605,45 €'))); // total row of the summary table
+  assert.ok(s.includes(hx('Total')));
 });
 
 test('a non-JPEG photo fails loudly with the expense number', () => {

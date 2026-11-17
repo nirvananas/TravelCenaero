@@ -123,9 +123,16 @@ export function fit(w, h, maxW, maxH) {
   return [w * s, h * s];
 }
 
+const hasAmount = (e) => e.amount !== '' && e.amount != null && Number.isFinite(Number(e.amount));
+
+// Summary table columns: [title, width in pt, right-aligned]
+const TABLE = [['N°', 26], ['Date', 58], ['Description', CW - 26 - 58 - 112 - 62], ['Type', 112], ['Montant', 62, true]];
+const ROW_LINE = 11.5;
+
 /**
- * mission: {title}
- * expenses: [{title, date, amount, note, photos: [{data: Uint8Array (JPEG)}]}]
+ * mission: {title, info: [[label, value], ...]} — info lines are printed under the title.
+ * expenses: [{title, date, amount, note, type, photos: [{data: Uint8Array (JPEG)}]}]
+ * Page 1: mission info and a summary table; then each expense (n) with its photos.
  * Expenses are numbered (1), (2), ... in the given order. Returns the PDF bytes.
  */
 export function buildJustificatifsPdf(mission, expenses) {
@@ -135,26 +142,64 @@ export function buildJustificatifsPdf(mission, expenses) {
   let y;
   const newPage = () => { page = { ops: [], xobjs: [] }; pages.push(page); y = PAGE_H - MARGIN; };
   const atTop = () => y === PAGE_H - MARGIN;
+  const text = (s, x, baseline, size, bold = false, grey = 0) =>
+    page.ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${grey} g ${num(x)} ${num(baseline)} Td ${hex(winAnsi(s))} Tj ET`);
   const textLine = (s, size, bold, grey = 0) => {
     y -= size * 1.25;
-    page.ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${grey} g ${num(MARGIN)} ${num(y + size * 0.25)} Td ${hex(winAnsi(s))} Tj ET`);
+    text(s, MARGIN, y + size * 0.25, size, bold, grey);
   };
+  const rule = (yy, grey = 0.75) =>
+    page.ops.push(`${grey} G 0.5 w ${num(MARGIN)} ${num(yy)} m ${num(MARGIN + CW)} ${num(yy)} l S`);
 
   newPage();
   for (const l of wrap(`${mission.title} — justificatifs`, 14, true, CW)) textLine(l, 14, true);
-  y -= 6;
+  y -= 4;
+  for (const [label, value] of mission.info || []) {
+    if (value) wrap(`${label} : ${value}`, 10, false, CW).forEach((l) => textLine(l, 10, false, 0.2));
+  }
 
-  let total = 0;
-  let anyAmount = false;
+  // Summary table.
+  if (expenses.length) {
+    const header = () => {
+      y -= 14;
+      let x = MARGIN;
+      for (const [t, w, right] of TABLE) {
+        text(t, right ? x + w - textWidth(t, 9, true) - 2 : x + 2, y + 3, 9, true);
+        x += w;
+      }
+      rule(y, 0.3);
+    };
+    y -= 10;
+    header();
+    expenses.forEach((e, i) => {
+      const cells = [`(${i + 1})`, e.date ? formatDateFr(e.date) : '', e.title || 'Sans titre', e.type || '',
+        hasAmount(e) ? formatAmount(e.amount) : ''];
+      const lines = cells.map((c, k) => wrap(c, 9, false, TABLE[k][1] - 4));
+      const h = Math.max(...lines.map((l) => l.length)) * ROW_LINE + 4;
+      if (y - h < MARGIN) { newPage(); header(); }
+      let x = MARGIN;
+      lines.forEach((ls, k) => {
+        const [, w, right] = TABLE[k];
+        ls.forEach((l, j) => text(l, right ? x + w - textWidth(l, 9) - 2 : x + 2, y - 2 - (j + 1) * ROW_LINE + 3, 9));
+        x += w;
+      });
+      y -= h;
+      rule(y);
+    });
+    const total = expenses.filter(hasAmount).reduce((s, e) => s + Number(e.amount), 0);
+    if (y - 18 < MARGIN) newPage();
+    y -= 16;
+    text('Total', MARGIN + 2, y + 3, 10, true);
+    const t = formatAmount(total);
+    text(t, MARGIN + CW - textWidth(t, 10, true) - 2, y + 3, 10, true);
+    newPage(); // receipts start on their own page
+  }
+
   expenses.forEach((e, i) => {
     const cap = wrap(`(${i + 1}) ${e.title || 'Sans titre'}`, 12, true, CW);
     const info = [];
     if (e.date) info.push(formatDateFr(e.date));
-    if (e.amount !== '' && e.amount != null && Number.isFinite(Number(e.amount))) {
-      info.push(formatAmount(e.amount));
-      total += Number(e.amount);
-      anyAmount = true;
-    }
+    if (hasAmount(e)) info.push(formatAmount(e.amount));
     if (e.note) info.push(e.note);
     if (!e.photos?.length) info.push('pas de justificatif');
     const infoLines = info.length ? wrap(info.join(' · '), 10, false, CW) : [];
@@ -175,7 +220,7 @@ export function buildJustificatifsPdf(mission, expenses) {
     // Keep the caption on the same page as (at least a shrunk) first photo.
     const firstH = imgs.length ? imgs[0].dh * MIN_SCALE + GAP : 0;
     if (!atTop() && y - headH - firstH < MARGIN) newPage();
-    y -= 12;
+    if (!atTop()) y -= 12;
     cap.forEach((l) => textLine(l, 12, true));
     infoLines.forEach((l) => textLine(l, 10, false, 0.33));
     y -= 6;
@@ -192,11 +237,7 @@ export function buildJustificatifsPdf(mission, expenses) {
       y -= GAP;
     }
   });
-  if (anyAmount) {
-    if (y - 30 < MARGIN) newPage();
-    y -= 14;
-    textLine(`Total : ${formatAmount(total)}`, 12, true);
-  }
+  if (atTop() && pages.length > 1 && !page.ops.length) pages.pop(); // no empty trailing page
 
   // Footer with page numbers.
   pages.forEach((p, k) => {
